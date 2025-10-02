@@ -1,0 +1,24 @@
+﻿@using System.Globalization
+@inject IJSRuntime Js
+@inject NavigationManager Nav
+
+<select value="@_current" @onchange="Change">
+    <option value="cs">Čeština</option>
+    <option value="en">English</option>
+</select>
+
+@code {
+    private string _current = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
+
+    private async Task Change(ChangeEventArgs e)
+    {
+        _current = e.Value?.ToString() ?? "cs";
+        await Js.InvokeVoidAsync("blazorCulture.set", _current);
+
+        var culture = new CultureInfo(_current);
+        CultureInfo.DefaultThreadCurrentCulture = culture;
+        CultureInfo.DefaultThreadCurrentUICulture = culture;
+                
+        Nav.NavigateTo(Nav.Uri, forceLoad: true);
+    }
+}

@@ -1,0 +1,23 @@
+# ---- base runtime (ASP.NET 8) ----
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
+WORKDIR /app
+# Aplikace bude poslouchat na 8080 (HTTP)
+EXPOSE 8080
+ENV ASPNETCORE_URLS=http://+:8080
+
+# ---- build (SDK 8) ----
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+# Zkopíruj celou solution (rychlejší je nejdøív .sln + csproj, ale pro jednoduchost staèí vše)
+COPY . .
+
+# Obnov závislosti a publish Server projektu
+RUN dotnet restore OnlineIntake/Server/OnlineIntake.Server.csproj
+RUN dotnet publish OnlineIntake/Server/OnlineIntake.Server.csproj -c Release -o /app/publish
+
+# ---- final image ----
+FROM base AS final
+WORKDIR /app
+COPY --from=build /app/publish .
+ENTRYPOINT ["dotnet", "OnlineIntake.Server.dll"]

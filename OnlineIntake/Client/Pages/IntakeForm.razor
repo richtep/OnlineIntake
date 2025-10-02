@@ -1,0 +1,199 @@
+﻿@page "/"
+@using OnlineIntake.Client.Models
+@using OnlineIntake.Client.Resources
+
+@inject IStringLocalizer<Labels> L
+@inject HttpClient Http
+@inject IJSRuntime Js
+
+<div class="container" style="max-width:720px;margin:2rem auto;">
+    <h1>@L["EnterForm"]</h1>
+    <hr />
+    <div class="content">
+        <EditForm Model="_model" OnValidSubmit="HandleSubmit">
+            <DataAnnotationsValidator />
+            <ValidationSummary />
+
+            <div class="row">
+                <label>@L["FirstName"]*</label>
+                <InputText @bind-Value="_model.FirstName" />
+                <ValidationMessage For="() => _model.FirstName" />
+            </div>
+
+            <div class="row">
+                <label>@L["LastName"]*</label>
+                <InputText @bind-Value="_model.LastName" />
+                <ValidationMessage For="() => _model.LastName" />
+            </div>
+
+            <div class="row">
+                <label>@L["BirthNumber"]*</label>
+
+                <InputText @bind-Value="BirthNumberInput"
+                           disabled="@_model.NoBirthNumber" />
+
+                <ValidationMessage For="() => _model.BirthNumber" />
+
+                <label style="margin-left:.75rem;">
+                    <InputCheckbox @bind-Value="_model.NoBirthNumber" @onchange="OnNoBirthNumberChanged" />
+                    @L["NoBirthNumber"]
+                </label>
+            </div>
+
+            <div class="row">
+                <label>@L["BirthDate"]*</label>
+                <InputDate @bind-Value="_model.BirthDate" TValue="DateOnly" />
+                <ValidationMessage For="() => _model.BirthDate" />
+            </div>
+            
+            <div class="row">
+                <label>@L["Gender"]*</label>
+                <InputSelect @bind-Value="_model.Gender" TValue="Gender?">
+                    <option value="">---</option>
+                    @foreach (var gender in Enum.GetValues<Gender>())
+                    {
+                        <option value="@gender">@L[$"Gender_{gender}"]</option>
+                    }
+                </InputSelect>
+                <ValidationMessage For="() => _model.Gender" />
+            </div>
+            
+            <div class="row">
+                <label>@L["Email"]*</label>
+                <InputText @bind-Value="_model.Email" type="email" />
+                <ValidationMessage For="() => _model.Email" />
+            </div>
+
+            <div class="row">
+                <label>@L["Nationality"]*</label><br />
+                <label>@L["CountryCodeFormat"]</label>
+                <InputSelect @bind-Value="_model.Nationality">
+                    <option value="">---</option>
+                    @foreach (var n in _nationalities)
+                    {
+                        <option value="@n.code">@n.code</option>
+                    }
+                </InputSelect>
+                <ValidationMessage For="() => _model.Nationality" />
+            </div>
+
+            <div class="row">
+                <label><InputCheckbox @bind-Value="_model.GdprConsent" /> @L["GdprConsent"]*</label>
+                <a href="/gdpr.pdf" target="_blank">GDPR PDF</a>
+                <ValidationMessage For="() => _model.GdprConsent" />
+            </div>
+
+            <button disabled="@_submitting" type="submit">@L["Submit"]</button>
+        </EditForm>
+        
+        @if (_saved)
+        {
+            <div class="alert alert-success" role="alert">
+                <br/>@L["SaveResult"]
+            </div>
+        }
+
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="alert alert-danger" role="alert">
+                @_error
+            </div>
+        }
+
+        @if (_lastResponse is not null)
+        {
+            <h3>JSON export</h3>
+            <pre>@_jsonText</pre>
+            <button @onclick="DownloadJson">@L["DownloadJson"]</button>
+        }
+    </div>
+</div>
+
+@code {
+
+    public record Nation(string code, string label);
+    private List<Nation> _nationalities = [];
+
+    private readonly ContactFormModel _model = new()
+    {
+        BirthDate = DateOnly.FromDateTime(DateTime.Today)
+    };
+
+    private bool _submitting;
+    bool _saved;
+    string? _error;
+    private string _jsonText = string.Empty;
+    private ContactDto? _lastResponse;
+
+    private string? BirthNumberInput
+    {
+        get => _model.BirthNumber;
+        set
+        {
+            if (_model.NoBirthNumber) return;
+
+            _model.BirthNumber = value;
+
+            var bn = value?.Replace("/", "").Trim();
+            if (string.IsNullOrWhiteSpace(bn) || bn.Length < 6 || !bn.All(char.IsDigit))
+            {
+                _model.BirthNumber = "invalid number";
+                return;
+            }
+
+            if (!OnlineIntake.Shared.Validation.CzechBirthNumber.TryParseBirthNumber(bn, out var date, out var g))
+            {
+                _model.BirthNumber = "invalid number";
+                return;
+            }
+
+            _model.Gender = g ?? _model.Gender;
+
+            if (_model.BirthDate != date)
+                _model.BirthDate = date;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var codes = await Http.GetFromJsonAsync<List<string>>("api/lookups/nationalities") ?? [];
+        _nationalities = codes.Select(code => new Nation(code, L["CountryCodeFormat", code].Value)).ToList();
+    }
+
+    private void OnNoBirthNumberChanged(ChangeEventArgs _)
+    {
+        if (_model.NoBirthNumber)
+            _model.BirthNumber = null;
+        StateHasChanged();
+    }
+
+    private async Task HandleSubmit()
+    {
+        _saved = false;
+        _error = null;
+        _submitting = true;
+        try
+        {
+            var request = _model.ToRequest();
+            var response = await Http.PostAsJsonAsync("api/contacts", request);
+            if (!response.IsSuccessStatusCode)
+            {
+                var err = await response.Content.ReadFromJsonAsync<Dictionary<string, object>>();
+                _error = err is not null && err.TryGetValue("message", out var m) ? m.ToString() : "Saving error";
+                return;
+            }
+            _saved = true;
+            _lastResponse = await response.Content.ReadFromJsonAsync<ContactDto>();
+            _jsonText = System.Text.Json.JsonSerializer.Serialize(_lastResponse,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        }
+        finally { _submitting = false; }
+    }
+
+    private async Task DownloadJson()
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(_jsonText);
+        var fileName = $"submission_{_lastResponse?.Id}.json";
+        await Js.InvokeVoidAsync("BlazorDownloadFile", fileName, "application/json", bytes);
+    }
+}
